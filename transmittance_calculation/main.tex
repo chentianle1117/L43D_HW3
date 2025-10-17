@@ -94,9 +94,36 @@ Please compute the following transmittance:
 \begin{tcolorbox}[fit,height=20cm, width=\textwidth, blank, borderline={0.5pt}{-2pt},halign=left, valign=center, nobeforeafter]
 
 
-% \begin{studentsolution}
-% Write your solution here.
-% \end{studentsolution}
+\begin{studentsolution}
+    The formula for transmittance $T$ through a segment of length $\Delta y$ with absorption coefficient $\sigma$ is given by the Beer-Lambert law:
+    \[ T = e^{-\sigma \Delta y} \]
+    The total transmittance through multiple segments is the product of the individual transmittances. The ray travels from right to left.
+    
+    First, calculate the transmittance for each individual segment:
+    \begin{itemize}
+        \item \textbf{Segment 1 ($y1 \leftrightarrow y2$):} $\sigma_1 = 1$, $\Delta y_1 = 2\text{m}$.
+        \[ T_{1} = T(y1, y2) = e^{-\sigma_1 \Delta y_1} = e^{-1 \times 2} = e^{-2} \approx 0.1353 \]
+        \item \textbf{Segment 2 ($y2 \leftrightarrow y3$):} $\sigma_2 = 0.5$, $\Delta y_2 = 1\text{m}$.
+        \[ T_{2} = T(y2, y3) = e^{-\sigma_2 \Delta y_2} = e^{-0.5 \times 1} = e^{-0.5} \approx 0.6065 \]
+        \item \textbf{Segment 3 ($y3 \leftrightarrow y4$):} $\sigma_3 = 10$, $\Delta y_3 = 3\text{m}$.
+        \[ T_{3} = T(y3, y4) = e^{-\sigma_3 \Delta y_3} = e^{-10 \times 3} = e^{-30} \approx 9.3576 \times 10^{-14} \]
+    \end{itemize}
+    
+    4 required values:
+    \begin{enumerate}
+        \item \textbf{$T(y1, y2)$:} transmittance through Segment 1 only.
+        \[ T(y1, y2) = T_1 = e^{-2} \approx 0.1353 \]
+    
+        \item \textbf{$T(y2, y4)$:} transmittance from $y4$ to $y2$, passing through Segment 3 and then Segment 2.
+        \[ T(y2, y4) = T_3 \times T_2 = e^{-30} \times e^{-0.5} = e^{-30.5} \approx 5.678 \times 10^{-14} \]
+    
+        \item \textbf{$T(x, y4)$:} transmittance from $y4$ all the way to the eye at $x$, passing through all three segments. We assume transmittance from $y1$ to $x$ is 1.
+        \[ T(x, y4) = T_3 \times T_2 \times T_1 = e^{-30} \times e^{-0.5} \times e^{-2} = e^{-32.5} \approx 7.685 \times 10^{-15} \]
+    
+        \item \textbf{$T(x, y3)$:} transmittance from $y3$ to the eye at $x$, passing through Segment 2 and then Segment 1.
+        \[ T(x, y3) = T_2 \times T_1 = e^{-0.5} \times e^{-2} = e^{-2.5} \approx 0.0821 \]
+    \end{enumerate}
+    \end{studentsolution}
 
 \end{tcolorbox}
 \end{questions}
