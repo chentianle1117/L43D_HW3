@@ -107,6 +107,7 @@ def render_points(filename, points, image_size=256, color=[0.7, 0.7, 1], device=
 
     # rend = renderer(mesh, cameras=cameras, lights=lights)
     rend = rend.detach().cpu().numpy()[0, ..., :3]  # (B, H, W, 4) -> (H, W, 3)
+    rend = np.clip(rend, 0.0, 1.0)
     plt.imsave(filename, rend)
 
     # The .cpu moves the tensor to GPU (if needed).
@@ -140,6 +141,7 @@ def render_points_with_save(
         for cam_idx in range(len(cameras)):
             image = points_renderer(point_cloud, cameras=cameras[cam_idx].to(device))
             image = image[0,:,:,:3].detach().cpu().numpy()
+            image = np.clip(image, 0.0, 1.0)
             all_images.append(image)
 
             # Save
@@ -230,6 +232,7 @@ def render_geometry(
         for cam_idx in range(len(cameras)):
             image = mesh_renderer(mesh, cameras=cameras[cam_idx].to(device))
             image = image[0,:,:,:3].detach().cpu().numpy()
+            image = np.clip(image, 0.0, 1.0)
             all_images.append(image)
 
             # Save

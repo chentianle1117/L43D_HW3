@@ -24,7 +24,8 @@ from ray_utils import (
     sample_images_at_xy,
     get_pixels_from_image,
     get_random_pixels_from_image,
-    get_rays_from_pixels
+    get_rays_from_pixels,
+    RayBundle
 )
 from data_utils import (
     dataset_from_config,
@@ -37,6 +38,7 @@ from dataset import (
     trivial_collate,
 )
 
+from render_functions import render_points_with_save
 
 # Model class containing:
 #   1) Implicit volume defining the scene
@@ -123,7 +125,28 @@ def render_images(
 
         # TODO (Q1.4): Visualize sample points as point cloud
         if cam_idx == 0 and file_prefix == '':
-            pass
+            # 1. Explicitly call the sampler to generate sample points
+            sampler = model.sampler
+            #    Make a temporary copy of the ray_bundle 
+            vis_ray_bundle = RayBundle(
+                origins=ray_bundle.origins.clone(),
+                directions=ray_bundle.directions.clone(),
+                sample_points=None,
+                sample_lengths=None,
+            )
+            vis_ray_bundle = sampler(vis_ray_bundle)
+
+            # 2. Reshape the points for the rendering function 
+            points_to_render = vis_ray_bundle.sample_points.view(1, -1, 3)
+
+            # 3. Call render_points_with_save
+            render_points_with_save(
+                points=points_to_render,
+                cameras=[camera], # Pass the current camera in a list
+                image_size=image_size,
+                save=True, # Tell the function to save the image
+                file_prefix="images/point_cloud_visualization" # Base filename
+            )
 
         # TODO (Q1.5): Implement rendering in renderer.py
         out = model(ray_bundle)
@@ -138,7 +161,23 @@ def render_images(
 
         # TODO (Q1.5): Visualize depth
         if cam_idx == 2 and file_prefix == '':
-            pass
+            # 1. Get the depth tensor from the renderer's output.
+            #    The shape is likely (H*W, 1).
+            depth_tensor = out['depth']
+
+            # 2. Reshape the depth tensor to the image dimensions (H, W).
+            depth_map = depth_tensor.view(image_size[1], image_size[0])
+
+            # 3. Move tensor to CPU and convert to NumPy array for saving.
+            depth_map_np = depth_map.detach().cpu().numpy()
+
+            # 4. Normalize the depth map to the [0, 1] range.
+            #    This makes closer pixels darker and farther pixels brighter (or vice versa depending on cmap).
+            depth_map_normalized = (depth_map_np - depth_map_np.min()) / (depth_map_np.max() - depth_map_np.min())
+
+            # 5. Save the normalized depth map as an image using matplotlib.
+            #    `cmap='viridis'` gives a color map similar to the example, 'gray' gives grayscale.
+            plt.imsave("images/depth_visualization.png", depth_map_normalized, cmap='viridis')
 
         # Save
         if save:
@@ -159,7 +198,7 @@ def render(
     model.eval()
 
     # Render spiral
-    cameras = create_surround_cameras(3.0, n_poses=20)
+    cameras = create_surround_cameras(5.0, n_poses=20)
     all_images = render_images(
         model, cameras, cfg.data.image_size
     )
@@ -217,9 +256,10 @@ def train(
 
             # Run model forward
             out = model(ray_bundle)
+            predicted_colors = out['feature']
 
             # TODO (Q2.2): Calculate loss
-            loss = None
+            loss = torch.nn.functional.mse_loss(predicted_colors, rgb_gt)
 
             # Backprop
             optimizer.zero_grad()

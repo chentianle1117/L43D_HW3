@@ -22,10 +22,27 @@ class VolumeRenderer(torch.nn.Module):
         rays_density: torch.Tensor,
         eps: float = 1e-10
     ):
-        # TODO (1.5): Compute transmittance using the equation described in the README
-        pass
+        # --- Step 1: Calculate alpha (opacity) for each segment ---
+        # alpha = 1 - exp(-sigma * delta)
+        alpha = 1.0 - torch.exp(-rays_density * deltas)
 
-        # TODO (1.5): Compute weight used for rendering from transmittance and alpha
+        # --- Step 2: Calculate Transmittance (T) for each point ---
+        # T_i = Product of (1 - alpha_j) for all points j *before* point i.
+        # This is how much light makes it *to* point i without being absorbed yet.
+        alpha_shifted = torch.cat(
+            [torch.ones_like(alpha[:, :1]), 1.0 - alpha + eps], dim=1
+        ) # Shape: (N_rays, N_pts + 1, 1)
+
+        # `torch.cumprod` calculates the cumulative product along the points dimension (dim=1).
+        transmittance = torch.cumprod(
+            alpha_shifted, dim=1
+        )[:, :-1] # Shape: (N_rays, N_pts, 1) 
+
+        # --- Step 3: Calculate the final weights ---
+        # Weight_i = Transmittance_i * Alpha_i
+        # How much light reached the point * how much that point absorbed.
+        weights = transmittance * alpha # Shape: (N_rays, N_pts, 1)
+
         return weights
     
     def _aggregate(
@@ -34,8 +51,7 @@ class VolumeRenderer(torch.nn.Module):
         rays_feature: torch.Tensor
     ):
         # TODO (1.5): Aggregate (weighted sum of) features using weights
-        pass
-
+        feature = torch.sum(weights * rays_feature, dim=-2)
         return feature
 
     def forward(
@@ -78,15 +94,19 @@ class VolumeRenderer(torch.nn.Module):
             ) 
 
             # TODO (1.5): Render (color) features using weights
-            pass
+            # Use the _aggregate function to get the final color.
+            # Reshape feature to match expected input shape (N_rays, N_pts, N_features)
+            feature_reshaped = feature.view(-1, n_pts, feature.shape[-1])
+            rendered_feature = self._aggregate(weights, feature_reshaped)
 
             # TODO (1.5): Render depth map
-            pass
+            depth_reshaped = depth_values.view(-1, n_pts, 1)
+            rendered_depth = self._aggregate(weights, depth_reshaped)
 
             # Return
             cur_out = {
-                'feature': feature,
-                'depth': depth,
+                'feature': rendered_feature,
+                'depth': rendered_depth,
             }
 
             chunk_outputs.append(cur_out)
