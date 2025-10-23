@@ -202,10 +202,18 @@ logs/
 
 # Output directories
 output/
+outputs/
 results/
 checkpoints/
+checkpoint_*/
+*_checkpoint/
 runs/
 wandb/
+images/
+
+# Hydra outputs
+.hydra/
+multirun/
 
 # Ray Tune results
 ray_results/
