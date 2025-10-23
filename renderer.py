@@ -56,7 +56,6 @@ class VolumeRenderer(torch.nn.Module):
 
     def forward(
         self,
-        sampler,
         implicit_fn,
         ray_bundle,
     ):
@@ -69,7 +68,9 @@ class VolumeRenderer(torch.nn.Module):
             cur_ray_bundle = ray_bundle[chunk_start:chunk_start+self._chunk_size]
 
             # Sample points along the ray
-            cur_ray_bundle = sampler(cur_ray_bundle)
+            # cur_ray_bundle = sampler(cur_ray_bundle)
+            if cur_ray_bundle.sample_points is None:
+                raise ValueError("RayBundle must have sample points before rendering.")
             n_pts = cur_ray_bundle.sample_shape[1]
 
             # Call implicit function with sample points
@@ -107,6 +108,7 @@ class VolumeRenderer(torch.nn.Module):
             cur_out = {
                 'feature': rendered_feature,
                 'depth': rendered_depth,
+                'weights': weights.view(-1, n_pts) 
             }
 
             chunk_outputs.append(cur_out)
@@ -152,12 +154,66 @@ class SphereTracingRenderer(torch.nn.Module):
                     the point can be arbitrary.
             mask: N_rays X 1 (boolean tensor) denoting which of the input rays intersect the surface.
         '''
-        # TODO (Q5): Implement sphere tracing
-        # 1) Iteratively update points and distance to the closest surface
-        #   in order to compute intersection points of rays with the implicit surface
-        # 2) Maintain a mask with the same batch dimension as the ray origins,
-        #   indicating which points hit the surface, and which do not
-        pass
+        # Initialize points to ray origins
+        points = origins
+        # Keep track of rays that haven't hit yet (initially all rays)
+        mask_unfinished = torch.ones_like(origins[..., 0], dtype=torch.bool)
+        # Accumulate distance traveled along each ray
+        dist_acc = torch.zeros_like(origins[..., 0])
+        # Initialize hit mask (initially no hits)
+        mask_hit = torch.zeros_like(origins[..., 0], dtype=torch.bool)
+
+        # Main sphere tracing loop
+        for _ in range(self.max_iters):
+            # Only process rays that haven't finished yet
+            points_unfinished = points[mask_unfinished]
+
+            # --- Intuition: Tap the magic stick ---
+            # Query the SDF function to get the distance to the nearest surface
+            # for the currently active points.
+            distances = implicit_fn(points_unfinished) # Shape: (N_unfinished, 1)
+
+            # --- Intuition: Check if we've hit the wall ---
+            # Check if the distance is very small (close to zero).
+            # We use a small threshold (e.g., 1e-4 or 1e-5) for numerical stability.
+            hit_threshold = 1e-5
+            mask_curr_hit = distances.abs() < hit_threshold
+            # --- Intuition: Check if we've gone too far ---
+            mask_missed = dist_acc[mask_unfinished] > self.far
+
+            # --- Update the unfinished mask ---
+            # Original problematic line:
+            # mask_unfinished[mask_unfinished] = ~mask_curr_hit.view(-1) & ~mask_missed
+
+            # --- FIX: Calculate the new state directly ---
+            # Identify which of the *currently unfinished* rays have now finished (either hit or missed).
+            currently_unfinished_indices = torch.where(mask_unfinished)[0]
+            finished_in_this_step = mask_curr_hit.view(-1) | mask_missed
+            still_unfinished_in_this_step = ~finished_in_this_step
+            
+            # Update mask_hit for rays that hit in this step
+            mask_hit[currently_unfinished_indices[mask_curr_hit.view(-1)]] = True
+
+            # Update the main mask_unfinished tensor at the correct indices.
+            mask_unfinished[currently_unfinished_indices[finished_in_this_step]] = False
+
+            # --- Intuition: Take a safe step ---
+            # Advance the points along their ray directions by the SDF distance.
+            # Only update points that are STILL unfinished (didn't hit or miss).
+            step = distances[still_unfinished_in_this_step] * directions[currently_unfinished_indices[still_unfinished_in_this_step]]
+            points = points.clone() # Ensure we modify a copy
+            points[currently_unfinished_indices[still_unfinished_in_this_step]] += step
+
+            # Update the accumulated distance for rays that are still unfinished
+            dist_acc = dist_acc.clone()
+            dist_acc[currently_unfinished_indices[still_unfinished_in_this_step]] += distances[still_unfinished_in_this_step].view(-1)
+
+            # --- Early exit if all rays are finished ---
+            if not mask_unfinished.any():
+                break
+
+        # Return the final points and the mask indicating which rays hit something.
+        return points, mask_hit.unsqueeze(-1) # Add channel dimension to mask
 
     def forward(
         self,

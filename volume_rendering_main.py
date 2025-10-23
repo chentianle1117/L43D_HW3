@@ -52,34 +52,103 @@ class Model(torch.nn.Module):
     ):
         super().__init__()
 
-        # Get implicit function from config
-        self.implicit_fn = implicit_dict[cfg.implicit_function.type](
+        # # Get implicit function from config
+        # self.implicit_fn = implicit_dict[cfg.implicit_function.type](
+        #     cfg.implicit_function
+        # )
+
+        # # Point sampling (raymarching) scheme
+        # self.sampler = sampler_dict[cfg.sampler.type](
+        #     cfg.sampler
+        # )
+
+        # # Initialize volume renderer
+        # self.renderer = renderer_dict[cfg.renderer.type](
+        #     cfg.renderer
+        # )
+
+        # --- Coarse Network ---
+        # Load the implicit function (e.g., NeRF) using the main config section
+        self.implicit_fn_coarse = implicit_dict[cfg.implicit_function.type](
             cfg.implicit_function
         )
 
-        # Point sampling (raymarching) scheme
-        self.sampler = sampler_dict[cfg.sampler.type](
-            cfg.sampler
+        # --- Fine Network ---
+        # Load a second implicit function. Often uses the same architecture.
+        # Check if a specific config section exists for the fine network, otherwise reuse the coarse one.
+        fine_cfg_section = cfg.implicit_function_fine if 'implicit_function_fine' in cfg else cfg.implicit_function
+        self.implicit_fn_fine = implicit_dict[cfg.implicit_function.type](
+            fine_cfg_section
         )
 
-        # Initialize volume renderer
+        # --- Coarse Sampler ---
+        # Uses the 'stratified' sampler type and settings from `cfg.sampler_coarse`
+        # (Make sure your config file has a `sampler_coarse` section)
+        self.sampler_coarse = sampler_dict['stratified'](
+            cfg.sampler_coarse
+        )
+
+        # --- Fine Sampler ---
+        # Uses the 'pdf' sampler type and settings from `cfg.sampler_fine`
+        # (Make sure your config file has a `sampler_fine` section defining 'pdf' type)
+        self.sampler_fine = sampler_dict['pdf'](
+             cfg.sampler_fine
+        )
+
+        # --- Renderer ---
+        # We use the same VolumeRenderer instance for both passes.
         self.renderer = renderer_dict[cfg.renderer.type](
             cfg.renderer
         )
 
-    def forward(
-        self,
-        ray_bundle
-    ):
-        # Call renderer with
-        #  a) Implicit volume
-        #  b) Sampling routine
+    # def forward(
+    #     self,
+    #     ray_bundle
+    # ):
+    #     # Call renderer with
+    #     #  a) Implicit volume
+    #     #  b) Sampling routine
 
-        return self.renderer(
-            self.sampler,
-            self.implicit_fn,
-            ray_bundle
+    #     return self.renderer(
+    #         self.sampler,
+    #         self.implicit_fn,
+    #         ray_bundle
+    #     )
+    def forward(self, ray_bundle):
+        # --- 1. Coarse Pass ---
+        # Sample points using the coarse (stratified) sampler.
+        ray_bundle_coarse = self.sampler_coarse(ray_bundle)
+
+        # Render using the coarse network and coarse samples.
+        # We need to modify the renderer's forward method slightly to accept 'coarse_pass=True'
+        # and to ensure it uses the correct implicit function and sampler internally.
+        # For simplicity here, let's assume the renderer's forward directly takes these:
+        rendered_coarse_output = self.renderer(
+            implicit_fn=self.implicit_fn_coarse, # Pass the coarse network
+            ray_bundle=ray_bundle_coarse # Pass the coarse samples
         )
+        # Store the weights from the coarse pass, needed for fine sampling.
+        coarse_weights = rendered_coarse_output['weights'] # Shape: (N_rays, N_coarse_pts)
+
+        # --- 2. Fine Sampling (Importance Sampling) ---
+        # Use the PDF sampler, feeding it the original ray bundle and the coarse weights.
+        # The PDF sampler calculates new sample points biased towards important regions.
+        ray_bundle_fine = self.sampler_fine(
+            ray_bundle_coarse, coarse_weights # Pass coarse bundle (for z_vals) and weights
+        )
+
+        # --- 3. Fine Pass ---
+        # Render using the fine network and the combined (coarse + fine) samples.
+        rendered_fine_output = self.renderer(
+            implicit_fn=self.implicit_fn_fine, # Pass the fine network
+            ray_bundle=ray_bundle_fine # Pass the fine samples
+        )
+
+        # Return results from both passes (needed for the combined loss).
+        return {
+            'coarse': rendered_coarse_output,
+            'fine': rendered_fine_output,
+        }
 
 
 def render_images(
@@ -153,7 +222,7 @@ def render_images(
 
         # Return rendered features (colors)
         image = np.array(
-            out['feature'].view(
+            out['fine']['feature'].view(
                 image_size[1], image_size[0], 3
             ).detach().cpu()
         )
@@ -163,7 +232,7 @@ def render_images(
         if cam_idx == 2 and file_prefix == '':
             # 1. Get the depth tensor from the renderer's output.
             #    The shape is likely (H*W, 1).
-            depth_tensor = out['depth']
+            depth_tensor = out['fine']['depth']
 
             # 2. Reshape the depth tensor to the image dimensions (H, W).
             depth_map = depth_tensor.view(image_size[1], image_size[0])
@@ -256,10 +325,21 @@ def train(
 
             # Run model forward
             out = model(ray_bundle)
-            predicted_colors = out['feature']
 
-            # TODO (Q2.2): Calculate loss
-            loss = torch.nn.functional.mse_loss(predicted_colors, rgb_gt)
+            # # TODO (Q2.2): Calculate loss (normal version)
+            # loss = torch.nn.functional.mse_loss(out['feature'], rgb_gt)
+
+            # TODO (Q4.2 / Q3.1): Calculate combined loss
+            # Calculate MSE loss for the coarse prediction
+            loss_coarse = torch.nn.functional.mse_loss(
+                out['coarse']['feature'], rgb_gt
+            )
+            # Calculate MSE loss for the fine prediction
+            loss_fine = torch.nn.functional.mse_loss(
+                out['fine']['feature'], rgb_gt
+            )
+            # The total loss is the sum of both
+            loss = loss_coarse + loss_fine
 
             # Backprop
             optimizer.zero_grad()
@@ -385,7 +465,18 @@ def train_nerf(
             out = model(ray_bundle)
 
             # TODO (Q3.1): Calculate loss
-            loss = None
+            # loss = torch.nn.functional.mse_loss(out['feature'], rgb_gt)
+
+            # Calculate MSE loss for the coarse prediction
+            loss_coarse = torch.nn.functional.mse_loss(
+                out['coarse']['feature'], rgb_gt # Access coarse feature
+            )
+            # Calculate MSE loss for the fine prediction
+            loss_fine = torch.nn.functional.mse_loss(
+                out['fine']['feature'], rgb_gt   # Access fine feature
+            )
+            # The total loss is the sum of both
+            loss = loss_coarse + loss_fine
 
             # Take the training step.
             optimizer.zero_grad()

@@ -298,8 +298,57 @@ class NeuralRadianceField(torch.nn.Module):
         embedding_dim_xyz = self.harmonic_embedding_xyz.output_dim
         embedding_dim_dir = self.harmonic_embedding_dir.output_dim
 
-        pass
+        # --- MLP Core Layers (Next Step) ---
+        hidden_dim = cfg.n_hidden_neurons_xyz 
+        n_layers = cfg.n_layers_xyz          
+        self.mlp_layers = torch.nn.ModuleList() 
 
+        #first layer
+        self.mlp_layers.append(torch.nn.Linear(embedding_dim_xyz,hidden_dim))
+        self.mlp_layers.append(torch.nn.ReLU())
+
+        for _ in range(n_layers-1):
+            self.mlp_layers.append(torch.nn.Linear(hidden_dim,hidden_dim))
+            self.mlp_layers.append(torch.nn.ReLU())
+
+        # Output heads
+        self.density_output = torch.nn.Linear(hidden_dim,1)
+        self.color_output = torch.nn.Linear(hidden_dim,3)
+
+    def forward(self, ray_bundle: RayBundle):
+        # --- TODO 1: Get and reshape sample points ---
+        # Reshape from (N_rays, N_pts, 3) to a flat list (N_rays * N_pts, 3).
+        sample_points = ray_bundle.sample_points.view(-1,3)
+
+        # --- TODO 2: Apply Positional Encoding ---
+        # Pass the sample points through the embedding layer.
+        embedded_points = self.harmonic_embedding_xyz(sample_points) # Shape: (N*P, embedding_dim_xyz)
+
+        # --- TODO 3: Pass through MLP Core ---
+        # Start with the embedded points.
+        x = embedded_points
+        # Loop through the layers in self.mlp_layers, applying each one.
+        for layer in self.mlp_layers:
+            x = layer(x) # Apply the layer to x
+
+        # After the loop, `x` holds the high-level features (shape: N*P, hidden_dim).
+
+        # --- TODO 4: Predict Density ---
+        # Pass features `x` through the density layer and apply ReLU.
+        raw_density = self.density_output(x) # Shape: (N*P, 1)
+        density = F.relu(raw_density)
+
+        # --- TODO 5: Predict Color ---
+        # Pass features `x` through the color layer and apply Sigmoid.
+        raw_color = self.color_output(x) # Shape: (N*P, 3)
+        color = torch.sigmoid(raw_color)
+
+        # --- TODO 6: Format Output ---
+        output = {
+            'density': density, # Final density variable
+            'feature': color, # Final color variable
+        }
+        return output
 
 class NeuralSurface(torch.nn.Module):
     def __init__(
@@ -307,8 +356,27 @@ class NeuralSurface(torch.nn.Module):
         cfg,
     ):
         super().__init__()
+
         # TODO (Q6): Implement Neural Surface MLP to output per-point SDF
         # TODO (Q7): Implement Neural Surface MLP to output per-point color
+        # Positional encoding
+        self.harmonic_embedding_xyz = HarmonicEmbedding(3, cfg.n_harmonic_functions_xyz)
+        embedding_dim_xyz = self.harmonic_embedding_xyz.output_dim
+
+        # MLP layers
+        hidden_dim = cfg.n_hidden_neurons_distance
+        n_layers = cfg.n_layers_distance
+
+        self.mlp_layers = torch.nn.ModuleList()
+        self.mlp_layers.append(torch.nn.Linear(embedding_dim_xyz,hidden_dim))
+        self.mlp_layers.append(torch.nn.ReLU())
+
+        for _ in range(n_layers-1):
+            self.mlp_layers.append(torch.nn.Linear(hidden_dim,hidden_dim))
+            self.mlp_layers.append(torch.nn.ReLU())
+        
+        self.distance_output = torch.nn.Linear(hidden_dim,1)
+        
 
     def get_distance(
         self,
@@ -320,7 +388,15 @@ class NeuralSurface(torch.nn.Module):
             distance: N X 1 Tensor, where N is number of input points
         '''
         points = points.view(-1, 3)
-        pass
+        embedded_points = self.harmonic_embedding_xyz(points)
+
+        x = embedded_points
+        for layer in self.mlp_layers:
+            x = layer(x)
+
+        distance = self.distance_output(x)
+
+        return distance
     
     def get_color(
         self,
